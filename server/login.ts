@@ -45,7 +45,6 @@ export const loginM$ = (unikey: any) =>
           params: {
             key: unikey,
           },
-          withTimestamp: true,
         }).pipe(
           map((res) => ({
             code: res?.code,

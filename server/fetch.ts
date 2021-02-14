@@ -1,6 +1,8 @@
 import { fromFetch } from 'rxjs/fetch';
 import { retry, tap, timeout } from 'rxjs/operators';
 
+import { localGetValue, __DEV__ } from '@utils';
+
 interface QueryOptions {
   params?: Record<string, any>;
   config?: RequestInit;
@@ -8,6 +10,7 @@ interface QueryOptions {
   withTimestamp?: boolean;
   retryTime?: number;
   timeoutTime?: number;
+  debug?: boolean;
 }
 
 export function query$<T>(url: string, opt?: QueryOptions) {
@@ -15,9 +18,10 @@ export function query$<T>(url: string, opt?: QueryOptions) {
     params = {},
     config = {},
     withCookie = true,
-    withTimestamp = false,
+    withTimestamp = true,
     retryTime = 1,
     timeoutTime = 1500,
+    debug = false,
   } = opt ?? {};
 
   let search = Object.entries(params)
@@ -25,9 +29,7 @@ export function query$<T>(url: string, opt?: QueryOptions) {
     .join('&');
 
   if (withCookie) {
-    search += `&cookie=${encodeURIComponent(
-      localStorage.getItem('cookie') || ''
-    )}`;
+    search += `&cookie=${encodeURIComponent(localGetValue('cookie'))}`;
   }
   if (withTimestamp) {
     search += `&timestamp=${new Date().valueOf()}`;
@@ -38,7 +40,7 @@ export function query$<T>(url: string, opt?: QueryOptions) {
     ...config,
   }).pipe(
     tap((v) => {
-      if (process.env.NODE_ENV === 'development') {
+      if (__DEV__ && debug) {
         console.log(`>>>>>>>>>>>>>>>>>>${url} Response >>>>>>>>>>>>>>>>>>`);
         console.log(v);
       }
