@@ -1,20 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GoEnd, GoStart, HamburgerButton, Pause, Play } from '@icon-park/react';
 import {
+  defaultIfEmpty,
   distinct,
   distinctUntilChanged,
-  distinctUntilKeyChanged,
   filter,
   last,
   map,
   mergeMap,
   pluck,
+  shareReplay,
+  skipWhile,
   switchMap,
   take,
-  takeLast,
   tap,
+  throttleTime,
 } from 'rxjs/operators';
-import { of, combineLatest, BehaviorSubject, Subject } from 'rxjs';
+import { of, combineLatest, BehaviorSubject, Subject, from } from 'rxjs';
 
 import { List, AutoSizer } from 'react-virtualized';
 
@@ -47,6 +49,18 @@ type DatasetEvent = React.MouseEvent<HTMLDivElement> & {
   };
 };
 
+const DefaultPlayerValue = {
+  time: 0,
+  rawTime: '',
+  content: '',
+  idx: 0,
+  currentTime: 0,
+  duration: 0,
+  ended: true,
+  volume: 1,
+  percentage: 0,
+};
+
 /**
  * to update current playlist
  */
@@ -72,7 +86,7 @@ const profileAndPlaylist$ = profileQ$().pipe(
     user,
     playlist,
   })),
-
+  shareReplay(1),
   tap(({ playlist }) => {
     if (Array.isArray(playlist) && playlist.length && playlist[0].id) {
       playlistCtr$.next(playlist[0].id);
@@ -107,7 +121,7 @@ const currentSongDetail$ = songCtr$.pipe(
         mergeMap((i) => i),
         take(1)
       ),
-      lyricQ$(id).pipe(pluck('lyric')),
+      lyricQ$(id).pipe(pluck('lyric'), defaultIfEmpty([])),
       of(id)
     )
   ),
@@ -126,19 +140,20 @@ const playerCtr$ = new Subject<{ target: TimeUpdateValue }>();
 /**
  * player info
  */
-const player$ = combineLatest(
-  currentSongDetail$.pipe(
-    pluck('lyric'),
-    mergeMap((i) => i),
-    map((i, idx) => ({ ...i, idx })),
-    takeLast(1),
-    distinctUntilKeyChanged('idx')
-  ),
-  playerCtr$
-).pipe(
-  switchMap(([lys, sg]) =>
-    of(lys).pipe(
-      last((ly) => ly?.time < sg.target.currentTime),
+const player$ = playerCtr$.pipe(
+  throttleTime(1000),
+  mergeMap((sg) =>
+    currentSongDetail$.pipe(
+      pluck('lyric'),
+      skipWhile((ly) => !ly),
+      mergeMap((ly) =>
+        from(ly).pipe(
+          map((i, idx) => ({ ...i, idx })),
+          last((ly) => ly?.time < sg.target.currentTime)
+        )
+      ),
+      filter((ly) => !!ly),
+      defaultIfEmpty(DefaultPlayerValue),
       map((ly) => {
         return {
           ...ly,
@@ -172,17 +187,7 @@ export default function Page() {
 
   const [menuVisible, { toogle }] = useToogle();
 
-  const [player, setPlayer] = useState({
-    time: 0,
-    rawTime: '',
-    content: '',
-    idx: 0,
-    currentTime: 0,
-    duration: 0,
-    ended: true,
-    volume: 1,
-    percentage: 0,
-  });
+  const [player, setPlayer] = useState(DefaultPlayerValue);
 
   const [listDetail, setListDetail] = useState(
     {} as PlaylistItem & PlaylistDetailM
@@ -276,7 +281,9 @@ export default function Page() {
       <main className="flex-1 grid place-items-center">
         <div className="flex gap-20 min-w-max">
           <div
-            className={`h-96 w-96 shadow-md rounded-full border-8 border-grey-900 $playing?'animate-spin-30s':''}`}
+            className={`h-96 w-96 shadow-md rounded-full border-8 border-grey-900 ${
+              !player.ended ? 'animate-spin-30s' : ''
+            }`}
           >
             <img
               src={
