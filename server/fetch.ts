@@ -1,9 +1,10 @@
 import { fromFetch } from 'rxjs/fetch';
-import { retry, tap, timeout } from 'rxjs/operators';
+import { catchError, retry, tap, timeout } from 'rxjs/operators';
+import { empty, of } from 'rxjs';
 
 import { localGetValue, __DEV__ } from '@utils';
 
-interface QueryOptions {
+interface QueryOptions<T = any> {
   params?: Record<string, any>;
   config?: RequestInit;
   withCookie?: boolean;
@@ -11,9 +12,11 @@ interface QueryOptions {
   retryTime?: number;
   timeoutTime?: number;
   debug?: boolean;
+  skip?: boolean;
+  defaultVal?: T;
 }
 
-export function query$<T>(url: string, opt?: QueryOptions) {
+export function query$<T>(url: string, opt?: QueryOptions<T>) {
   const {
     params = {},
     config = {},
@@ -22,7 +25,13 @@ export function query$<T>(url: string, opt?: QueryOptions) {
     retryTime = 1,
     timeoutTime = 1500,
     debug = false,
+    skip = false,
+    defaultVal,
   } = opt ?? {};
+
+  if (skip) {
+    return empty();
+  }
 
   let search = Object.entries(params)
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
@@ -46,6 +55,7 @@ export function query$<T>(url: string, opt?: QueryOptions) {
       }
     }),
     timeout(timeoutTime),
-    retry<T>(retryTime)
+    retry<T>(retryTime),
+    catchError(() => of(defaultVal))
   );
 }

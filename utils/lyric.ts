@@ -4,9 +4,9 @@ import { LyricM } from '@server';
 
 const timeReg = /\[\d*:\d*((\.|:)\d*)*\]/g;
 
-export function parseLyric(
-  lrc = ''
-): { time: number; rawTime: string; content: string }[] {
+export type LyricItem = { time: number; rawTime: string; content: string };
+
+export function parseLyric(lrc = ''): LyricItem[] {
   const lyrics = lrc?.split('\n') ?? [];
 
   const lrcObj = [];

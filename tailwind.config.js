@@ -15,6 +15,15 @@ module.exports = {
       zIndex: {
         '-10': '-10',
       },
+      animation: {
+        'spin-30s': 'spin 30s linear infinite',
+      },
+      transitionDuration: {
+        8000: '8000ms',
+      },
+      transitionProperty: {
+        width: 'width',
+      },
     },
   },
   variants: {

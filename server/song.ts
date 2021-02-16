@@ -32,21 +32,23 @@ export type LyricM = {
   code: number;
 };
 
-export const lyricQ$ = (id: number) =>
-  query$<LyricM>(`/lyric`, {
+export const lyricQ$ = (id: number | string) => {
+  return query$<LyricM>(`/lyric`, {
     params: {
       id,
     },
+    skip: !id,
   }).pipe(map(lyricParser));
+};
 
-export const songUrlQ$ = (id: number) =>
+export const songUrlQ$ = (id: number | string) =>
   query$(`/song/url`, {
     params: {
       id,
     },
   });
 
-type SongM = {
+export type SongM = {
   name: string;
   id: number;
   pst: number;
@@ -103,7 +105,7 @@ type SongM = {
   };
 };
 
-export const songDetailQ$ = (ids: number[]) =>
+export const songDetailQ$ = (ids: Array<number | string>) =>
   query$<{ songs: SongM[] }>(`/song/detail`, {
     params: {
       ids: ids.join(','),

@@ -108,7 +108,7 @@ export type PlaylistDetailM = {
   }[];
 };
 
-export const playlistDetailQ$ = (id: number) =>
+export const playlistDetailQ$ = (id: number | string) =>
   query$<{
     playlist: PlaylistItem & PlaylistDetailM;
   }>(`/playlist/detail`, {
