@@ -1,23 +1,20 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GoEnd, GoStart, HamburgerButton, Pause, Play } from '@icon-park/react';
-import { useEventCallback, useObservable } from 'rxjs-hooks';
 import {
-  debounceTime,
-  defaultIfEmpty,
+  distinct,
+  distinctUntilChanged,
   distinctUntilKeyChanged,
+  filter,
   last,
   map,
   mergeMap,
   pluck,
-  shareReplay,
-  skipWhile,
   switchMap,
   take,
+  takeLast,
   tap,
-  throttleTime,
-  withLatestFrom,
 } from 'rxjs/operators';
-import { Observable, of, combineLatest } from 'rxjs';
+import { of, combineLatest, BehaviorSubject, Subject } from 'rxjs';
 
 import { List, AutoSizer } from 'react-virtualized';
 
@@ -30,8 +27,9 @@ import {
   SongM,
   PlaylistItem,
   PlaylistDetailM,
+  AccountAndProfileM,
 } from '@server';
-import { LyricItem } from '@utils';
+import { LyricItem, useToogle } from '@utils';
 
 type TimeUpdateValue = {
   currentTime: number;
@@ -49,154 +47,229 @@ type DatasetEvent = React.MouseEvent<HTMLDivElement> & {
   };
 };
 
-export default function Page() {
-  const user = useObservable(() => profileQ$().pipe(shareReplay(1)));
+/**
+ * to update current playlist
+ */
+const playlistCtr$ = new BehaviorSubject<string | number>(0);
 
-  const audioRef = useRef<HTMLAudioElement>();
+/**
+ *  to update current song
+ */
+const songCtr$ = new BehaviorSubject<string | number>(0);
 
-  const { playlist, playlistDetail, songDetail, lyrics } = useObservable(
-    () =>
-      profileQ$().pipe(
-        mergeMap((u) => playlistQ$(u?.profile?.userId)),
-        shareReplay(1),
-        pluck('playlist'),
-        mergeMap((list) => {
-          if (Array.isArray(list) && list?.[0].id) {
-            return playlistDetailQ$(list?.[0].id).pipe(
-              pluck('playlist'),
-              shareReplay(1),
-              map((d) => ({
-                playlist: list,
-                playlistDetail: d,
-              }))
-            );
-          }
+/**
+ * profile and playlist info
+ * and autoplay first playlist
+ */
 
-          return of({
-            playlist: list,
-            playlistDetail: {} as PlaylistItem & PlaylistDetailM,
-          });
-        }),
-        mergeMap((prev) => {
-          if (
-            Array.isArray(prev?.playlistDetail?.tracks) &&
-            prev?.playlistDetail?.tracks?.[0]?.id
-          ) {
-            const currentSongId = prev?.playlistDetail?.tracks?.[0]?.id;
-            audioRef.current.src = `https://music.163.com/song/media/outer/url?id=${currentSongId}.mp3`;
+const profileAndPlaylist$ = profileQ$().pipe(
+  filter((u) => !!u?.profile?.userId),
+  distinct((u) => u?.profile?.userId),
+  mergeMap((u) =>
+    combineLatest(of(u), playlistQ$(u?.profile?.userId).pipe(pluck('playlist')))
+  ),
+  map(([user, playlist]) => ({
+    user,
+    playlist,
+  })),
 
-            audioRef.current.addEventListener('load', () => {
-              audioRef.current.play();
-            });
-
-            return combineLatest(
-              lyricQ$(currentSongId).pipe(pluck('lyric'), shareReplay(1)),
-              songDetailQ$([currentSongId]).pipe(
-                mergeMap((i) => i),
-                take(1)
-              )
-            ).pipe(
-              map(([lr, sg]) => ({
-                ...prev,
-                lyrics: lr,
-                songDetail: sg,
-              }))
-            );
-          }
-
-          return of({
-            ...prev,
-            lyrics: [] as LyricItem[],
-            songDetail: {} as SongM,
-          });
-        })
-      ),
-    {
-      playlist: [],
-      playlistDetail: {} as PlaylistItem & PlaylistDetailM,
-      lyrics: [],
-      songDetail: {} as SongM,
+  tap(({ playlist }) => {
+    if (Array.isArray(playlist) && playlist.length && playlist[0].id) {
+      playlistCtr$.next(playlist[0].id);
     }
-  );
+  })
+);
+
+/**
+ * update current playlist
+ * and autoplay first song
+ */
+const currentListDetail$ = playlistCtr$.pipe(
+  filter((id) => !!id),
+  distinctUntilChanged(),
+  switchMap((id) => playlistDetailQ$(id).pipe(pluck('playlist'))),
+  tap((ld) => {
+    if (Array.isArray(ld?.tracks) && ld?.tracks?.[0]?.id) {
+      songCtr$.next(ld?.tracks?.[0]?.id);
+    }
+  })
+);
+
+/**
+ * update current song and its lyric
+ */
+const currentSongDetail$ = songCtr$.pipe(
+  filter((id) => !!id),
+  distinctUntilChanged(),
+  switchMap((id) =>
+    combineLatest(
+      songDetailQ$([id]).pipe(
+        mergeMap((i) => i),
+        take(1)
+      ),
+      lyricQ$(id).pipe(pluck('lyric')),
+      of(id)
+    )
+  ),
+  map(([detail, lyric, songid]) => ({
+    detail,
+    lyric,
+    songid,
+  }))
+);
+
+/**
+ * control player
+ */
+const playerCtr$ = new Subject<{ target: TimeUpdateValue }>();
+
+/**
+ * player info
+ */
+const player$ = combineLatest(
+  currentSongDetail$.pipe(
+    pluck('lyric'),
+    mergeMap((i) => i),
+    map((i, idx) => ({ ...i, idx })),
+    takeLast(1),
+    distinctUntilKeyChanged('idx')
+  ),
+  playerCtr$
+).pipe(
+  switchMap(([lys, sg]) =>
+    of(lys).pipe(
+      last((ly) => ly?.time < sg.target.currentTime),
+      map((ly) => {
+        return {
+          ...ly,
+          currentTime: sg.target.currentTime,
+          duration: sg.target.duration,
+          ended: sg.target.ended,
+          volume: sg.target.volume,
+          percentage: Math.floor(
+            (Number(sg.target.currentTime) / Number(sg.target.duration) || 0) *
+              100
+          ),
+        };
+      })
+    )
+  )
+);
+
+export default function Page() {
+  const audioRef = useRef<
+    HTMLAudioElement & {
+      attached?: boolean;
+    }
+  >();
 
   const ref = useRef<HTMLDivElement>();
 
-  const [onTimeUpdate, activeOne] = useEventCallback(
-    (e$) => {
-      console.log(lyrics);
-      return e$.pipe(
-        throttleTime(1000),
-        map((e: { target: TimeUpdateValue }) => ({
-          currentTime: e.target.currentTime,
-          duration: e.target.duration,
-          ended: e.target.ended,
-          volume: e.target.volume,
-        })),
-        tap(console.log),
-        switchMap((t) =>
-          of(lyrics).pipe(
-            // skipWhile((l) => !l?.length),
-            mergeMap((i) => i),
-            map((i, idx) => ({ ...i, idx })),
-            last((i) => i?.time < t?.currentTime),
-            distinctUntilKeyChanged('idx'),
-            tap(() => console.log(lyrics)),
-            map((i, idx) => ({
-              ...i,
-              idx,
-              ...t,
-              percentage: Math.floor(
-                (Number(t.currentTime) / Number(t.duration) || 0) * 100
-              ),
-            })),
+  const [{ user, playlist }, setProfileAndPlaylist] = useState({
+    user: {} as AccountAndProfileM,
+    playlist: [] as PlaylistItem[],
+  });
 
-            tap((val) => {
-              ref.current.style.transform = `translateY(${Math.floor(
-                192 - val.idx * 20
-              )}px)`;
-            })
-          )
-        )
-      );
-    },
-    {
-      time: 0,
-      rawTime: '',
-      content: '',
-      idx: 0,
-      currentTime: 0,
-      duration: 0,
-      ended: true,
-      volume: 1,
-      percentage: 0,
-    },
-    [lyrics, ref.current]
+  const [menuVisible, { toogle }] = useToogle();
+
+  const [player, setPlayer] = useState({
+    time: 0,
+    rawTime: '',
+    content: '',
+    idx: 0,
+    currentTime: 0,
+    duration: 0,
+    ended: true,
+    volume: 1,
+    percentage: 0,
+  });
+
+  const [listDetail, setListDetail] = useState(
+    {} as PlaylistItem & PlaylistDetailM
   );
 
-  const [onMenuClick, menuVisible] = useEventCallback((e$, v$) => {
-    return e$.pipe(
-      debounceTime(500),
-      withLatestFrom(v$),
-      map(([_, v]) => !v),
-      tap(console.log)
-    );
-  }, false);
+  const [songDetail, setSongDetail] = useState({
+    detail: {} as SongM,
+    lyric: [] as LyricItem[],
+    songid: 0 as string | number,
+  });
 
-  const [onSongListClick, currentSongId] = useEventCallback(
-    (e$: Observable<React.MouseEvent<HTMLDivElement>>) => {
-      return e$.pipe(
-        map(
-          (e: DatasetEvent) =>
-            e.target?.dataset?.songid ??
-            e.target?.parentElement?.dataset?.songid
-        ),
-        debounceTime(500),
-        tap(console.log)
-      );
-    },
-    songDetail?.id,
-    [songDetail?.id]
-  );
+  const onTimeUpdate = useCallback((e: any) => {
+    playerCtr$.next(e as { target: TimeUpdateValue });
+  }, []);
+
+  const autoPlay = useCallback(() => {
+    audioRef.current?.play();
+  }, []);
+
+  const onPlaylistClick = useCallback((e: DatasetEvent) => {
+    const listid =
+      e.target?.dataset?.listid ?? e.target?.parentElement?.dataset?.listid;
+    if (listid) {
+      playlistCtr$.next(listid);
+    }
+  }, []);
+
+  const onSongListClick = useCallback((e: DatasetEvent) => {
+    const songid =
+      e.target?.dataset?.songid ?? e.target?.parentElement?.dataset?.songid;
+    if (songid) {
+      songCtr$.next(songid);
+    }
+  }, []);
+
+  useEffect(() => {
+    const subscription = profileAndPlaylist$.subscribe((p) => {
+      setProfileAndPlaylist(p);
+    });
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const subscription = currentListDetail$.subscribe((list) => {
+      setListDetail(list);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const subscription = currentSongDetail$.subscribe((dl) => {
+      setSongDetail(dl);
+
+      if (audioRef.current && dl.songid) {
+        audioRef.current.src = `https://music.163.com/song/media/outer/url?id=${dl.songid}.mp3`;
+
+        if (!audioRef.current.attached)
+          audioRef.current.addEventListener('load', autoPlay);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      audioRef.current?.removeEventListener('load', autoPlay);
+    };
+  }, []);
+
+  useEffect(() => {
+    const subscription = player$.subscribe((actOne) => {
+      setPlayer(actOne);
+
+      if (ref.current) {
+        ref.current.style.transform = `translateY(${Math.floor(
+          192 - actOne.idx * 20
+        )}px)`;
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   return (
     <article className="flex h-screen bg-grey-A400">
@@ -206,7 +279,10 @@ export default function Page() {
             className={`h-96 w-96 shadow-md rounded-full border-8 border-grey-900 $playing?'animate-spin-30s':''}`}
           >
             <img
-              src={songDetail?.al?.picUrl ?? 'https://via.placeholder.com/400'}
+              src={
+                songDetail?.detail?.al?.picUrl ??
+                'https://via.placeholder.com/400'
+              }
               alt="album"
               className="rounded-full"
             />
@@ -216,13 +292,13 @@ export default function Page() {
               ref={ref}
               className="ease-in-out transition-transform duration-500 overflow-x-hidden"
             >
-              {Array.isArray(lyrics) &&
-                lyrics.map((lyric) => {
+              {Array.isArray(songDetail?.lyric) &&
+                songDetail?.lyric.map((lyric) => {
                   return (
                     <div
                       key={lyric?.rawTime}
                       className={`${
-                        lyric?.rawTime === activeOne.rawTime
+                        lyric?.rawTime === player.rawTime
                           ? 'text-cyan-500 text-lg'
                           : 'text-sm text-grey-400'
                       } text-center`}
@@ -256,13 +332,14 @@ export default function Page() {
             <span className="text-cyan-500 text-xs">我的歌单</span>
             <span className="flex-1 border-b border-cyan-500" />
           </div>
-          <div className="w-full">
+          <div className="w-full" onClick={onPlaylistClick}>
             {Array.isArray(playlist) &&
               playlist.map((item) => {
                 return (
                   <div
                     className="w-full flex items-center gap-1 cursor-pointer"
-                    key={item.id}
+                    key={item.trackUpdateTime}
+                    data-listid={item.id}
                   >
                     <span className="block w-1 h-1 rounded-full bg-cyan-700" />
                     <span className="h-6 text-xs text-grey-400 overflow-ellipsis break-all overflow-hidden leading-loose">
@@ -290,7 +367,7 @@ export default function Page() {
               size="24"
               className="text-grey-500 hover:text-cyan-500"
             />
-            {activeOne.ended ? (
+            {player.ended ? (
               <Play
                 theme="outline"
                 size="24"
@@ -312,7 +389,7 @@ export default function Page() {
               <div
                 className="bg-cyan-500 rounded h-full transition-width duration-150 ease-linear"
                 style={{
-                  width: `${activeOne.percentage}%`,
+                  width: `${player.percentage}%`,
                 }}
               />
             </div>
@@ -322,7 +399,7 @@ export default function Page() {
               theme="outline"
               size="24"
               className="text-grey-300 hover:text-cyan-500"
-              onClick={onMenuClick}
+              onClick={toogle}
             />
 
             <div
@@ -330,9 +407,9 @@ export default function Page() {
                 menuVisible ? 'visible' : 'invisible'
               }`}
             >
-              <div>{playlistDetail?.name}</div>
+              <div>{songDetail?.detail?.name}</div>
               <div
-                className="h-80 mt-4 text-sm text-grey-400"
+                className="h-80 mt-4 text-sm text-grey-400 cursor-pointer"
                 onClick={onSongListClick}
               >
                 <AutoSizer className="h-full">
@@ -341,24 +418,24 @@ export default function Page() {
                       height={height}
                       width={width}
                       overscanRowCount={6}
-                      rowCount={playlistDetail?.tracks?.length ?? 0}
+                      rowCount={listDetail?.tracks?.length ?? 0}
                       rowHeight={60}
                       rowRenderer={({ index, key, style }) => {
-                        return (playlistDetail?.tracks?.length ?? 0) > index ? (
+                        return (listDetail?.tracks?.length ?? 0) > index ? (
                           <div
                             key={key}
                             style={style}
                             className="flex gap-4 items-center"
-                            data-songid={playlistDetail?.tracks?.[index]?.id}
+                            data-songid={listDetail?.tracks?.[index]?.id}
                           >
                             <img
                               src={`${
-                                playlistDetail?.tracks?.[index]?.al?.picUrl ??
+                                listDetail?.tracks?.[index]?.al?.picUrl ??
                                 'https://via.placeholder.com/60x60'
                               }?param=40y40`}
                               className="w-10 h-10"
                             />
-                            <span>{playlistDetail?.tracks?.[index]?.name}</span>
+                            <span>{listDetail?.tracks?.[index]?.name}</span>
                           </div>
                         ) : (
                           <div />

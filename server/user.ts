@@ -56,9 +56,10 @@ export type ProfileM = {
   anchor: boolean;
 };
 
-export const profileQ$ = () =>
-  query$<{
-    code: number;
-    account: AccountM;
-    profile: ProfileM;
-  }>(`/user/account`);
+export type AccountAndProfileM = {
+  code: number;
+  account: AccountM;
+  profile: ProfileM;
+};
+
+export const profileQ$ = () => query$<AccountAndProfileM>(`/user/account`);
