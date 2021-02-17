@@ -544,14 +544,14 @@ export default function Page() {
               data-act="prev"
             />
             {player.playing ? (
-              <Play
+              <Pause
                 theme="outline"
                 size="24"
                 className="text-grey-300 hover:text-cyan-500"
                 data-act="pause"
               />
             ) : (
-              <Pause
+              <Play
                 theme="outline"
                 size="24"
                 className="text-grey-300 hover:text-cyan-500"

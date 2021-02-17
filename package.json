@@ -1,7 +1,9 @@
 {
-  "name": "music",
+  "name": "rxjs-neteasemusic",
   "version": "0.1.0",
-  "private": true,
+  "description": "Netease Music Demo written by rxjs",
+  "author": "xiaoqi<wangxiaoqi1997@gmail.com>",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

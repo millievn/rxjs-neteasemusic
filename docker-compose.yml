@@ -1,0 +1,18 @@
+version: '3'
+services:
+  music-app:
+    container_name: music-app
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    image: music-app-images
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    env_file: .env
+  music-api:
+    container_name: music-api
+    image: binaryify/netease_cloud_music_api:latest
+    restart: unless-stopped
+    ports:
+      - '4001:3000'
