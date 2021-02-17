@@ -34,6 +34,7 @@ export function parseLyric(lrc = ''): LyricItem[] {
       }
     }
   }
+
   return lrcObj;
 }
 

@@ -52,6 +52,54 @@ export const playlistQ$ = (uid: number) =>
     },
   });
 
+export type TrackM = {
+  a: null | string;
+  al: {
+    id: number;
+    name: string;
+    pic: number;
+    picUrl: string;
+    pic_str: string;
+    tns: [];
+  };
+  alia: [];
+  ar: [{ id: number; name: string; tns: []; alias: [] }];
+  cd: string;
+  cf: string;
+  copyright: number;
+  cp: number;
+  crbt: null | string;
+  djId: number;
+  dt: number;
+  fee: number;
+  ftype: number;
+  h: { br: number; fid: number; size: number; vd: number };
+  id: number;
+  l: { br: number; fid: number; size: number; vd: number };
+  m: { br: number; fid: number; size: number; vd: number };
+  mark: number;
+  mst: number;
+  mv: number;
+  name: string;
+  no: number;
+  noCopyrightRcmd: null | string;
+  originCoverType: number;
+  originSongSimpleData: null | string;
+  pop: number;
+  pst: number;
+  publishTime: number;
+  rt: string;
+  rtUrl: null | string;
+  rtUrls: [];
+  rtype: number;
+  rurl: null | string;
+  s_id: number;
+  single: number;
+  st: number;
+  t: number;
+  v: number;
+};
+
 export type PlaylistDetailM = {
   trackIds: {
     alg: null | string;
@@ -59,59 +107,15 @@ export type PlaylistDetailM = {
     id: number;
     v: number;
   }[];
-  tracks: {
-    a: null | string;
-    al: {
-      id: number;
-      name: string;
-      pic: number;
-      picUrl: string;
-      pic_str: string;
-      tns: [];
-    };
-    alia: [];
-    ar: [{ id: number; name: string; tns: []; alias: [] }];
-    cd: string;
-    cf: string;
-    copyright: number;
-    cp: number;
-    crbt: null | string;
-    djId: number;
-    dt: number;
-    fee: number;
-    ftype: number;
-    h: { br: number; fid: number; size: number; vd: number };
-    id: number;
-    l: { br: number; fid: number; size: number; vd: number };
-    m: { br: number; fid: number; size: number; vd: number };
-    mark: number;
-    mst: number;
-    mv: number;
-    name: string;
-    no: number;
-    noCopyrightRcmd: null | string;
-    originCoverType: number;
-    originSongSimpleData: null | string;
-    pop: number;
-    pst: number;
-    publishTime: number;
-    rt: string;
-    rtUrl: null | string;
-    rtUrls: [];
-    rtype: number;
-    rurl: null | string;
-    s_id: number;
-    single: number;
-    st: number;
-    t: number;
-    v: number;
-  }[];
+  tracks: TrackM[];
+};
+
+export type playlistDetailQM = {
+  playlist: Omit<PlaylistItem, 'tracks'> & PlaylistDetailM;
 };
 
 export const playlistDetailQ$ = (id: number | string) =>
-  query$<{
-    playlist: PlaylistItem & PlaylistDetailM;
-  }>(`/playlist/detail`, {
+  query$<playlistDetailQM>(`/playlist/detail`, {
     params: {
       id,
     },

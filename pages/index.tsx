@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GoEnd, GoStart, HamburgerButton, Pause, Play } from '@icon-park/react';
 import {
+  catchError,
   defaultIfEmpty,
   distinct,
   distinctUntilChanged,
@@ -10,13 +11,21 @@ import {
   mergeMap,
   pluck,
   shareReplay,
-  skipWhile,
   switchMap,
   take,
   tap,
   throttleTime,
+  withLatestFrom,
 } from 'rxjs/operators';
-import { of, combineLatest, BehaviorSubject, Subject, from } from 'rxjs';
+import {
+  of,
+  combineLatest,
+  BehaviorSubject,
+  Subject,
+  from,
+  empty,
+  throwError,
+} from 'rxjs';
 
 import { List, AutoSizer } from 'react-virtualized';
 
@@ -28,8 +37,8 @@ import {
   songDetailQ$,
   SongM,
   PlaylistItem,
-  PlaylistDetailM,
   AccountAndProfileM,
+  playlistDetailQM,
 } from '@server';
 import { LyricItem, useToogle } from '@utils';
 
@@ -38,6 +47,8 @@ type TimeUpdateValue = {
   duration: number;
   ended: boolean;
   volume: number;
+  paused: boolean;
+  readyState: number;
 };
 
 type DatasetEvent = React.MouseEvent<HTMLDivElement> & {
@@ -59,7 +70,10 @@ const DefaultPlayerValue = {
   ended: true,
   volume: 1,
   percentage: 0,
+  playing: false,
 };
+
+type PlayerValueM = typeof DefaultPlayerValue;
 
 /**
  * to update current playlist
@@ -102,6 +116,7 @@ const currentListDetail$ = playlistCtr$.pipe(
   filter((id) => !!id),
   distinctUntilChanged(),
   switchMap((id) => playlistDetailQ$(id).pipe(pluck('playlist'))),
+  shareReplay(1),
   tap((ld) => {
     if (Array.isArray(ld?.tracks) && ld?.tracks?.[0]?.id) {
       songCtr$.next(ld?.tracks?.[0]?.id);
@@ -121,7 +136,10 @@ const currentSongDetail$ = songCtr$.pipe(
         mergeMap((i) => i),
         take(1)
       ),
-      lyricQ$(id).pipe(pluck('lyric'), defaultIfEmpty([])),
+      lyricQ$(id).pipe(
+        pluck('lyric'),
+        catchError(() => of([] as LyricItem[]))
+      ),
       of(id)
     )
   ),
@@ -129,46 +147,148 @@ const currentSongDetail$ = songCtr$.pipe(
     detail,
     lyric,
     songid,
-  }))
+  })),
+  shareReplay(1)
 );
+
+type PlayerSwitchType = 'prev' | 'next';
+type PlayerControlType = 'play' | 'pause';
+
+const PlayerControlTypeArr = ['play', 'pause'];
+
+type PlayerAction =
+  | {
+      type: 'time';
+      target: TimeUpdateValue;
+    }
+  | {
+      type: 'switch';
+      target: PlayerSwitchType;
+    }
+  | {
+      type: 'control';
+      target: PlayerControlType;
+    };
 
 /**
  * control player
  */
-const playerCtr$ = new Subject<{ target: TimeUpdateValue }>();
+const playerCtr$ = new Subject<PlayerAction>();
 
 /**
- * player info
+ * player info when playing
  */
-const player$ = playerCtr$.pipe(
-  throttleTime(1000),
-  mergeMap((sg) =>
-    currentSongDetail$.pipe(
-      pluck('lyric'),
-      skipWhile((ly) => !ly),
-      mergeMap((ly) =>
-        from(ly).pipe(
-          map((i, idx) => ({ ...i, idx })),
-          last((ly) => ly?.time < sg.target.currentTime)
-        )
-      ),
-      filter((ly) => !!ly),
-      defaultIfEmpty(DefaultPlayerValue),
-      map((ly) => {
-        return {
-          ...ly,
-          currentTime: sg.target.currentTime,
-          duration: sg.target.duration,
-          ended: sg.target.ended,
-          volume: sg.target.volume,
+const playerTime$ = playerCtr$.pipe(
+  mergeMap((act) => {
+    if (act.type === 'time') {
+      return of(act).pipe(
+        throttleTime(1000),
+        pluck<PlayerAction, TimeUpdateValue>('target'),
+        map((act) => ({
+          currentTime: act.currentTime < 1 ? 1 : act.currentTime,
+          duration: act.duration,
+          ended: act.ended,
+          volume: act.volume,
           percentage: Math.floor(
-            (Number(sg.target.currentTime) / Number(sg.target.duration) || 0) *
-              100
+            (Number(act.currentTime) / Number(act.duration) || 0) * 100
           ),
-        };
-      })
-    )
-  )
+          type: 'time',
+          playing:
+            act.currentTime > 0 &&
+            !act.paused &&
+            !act.ended &&
+            act.readyState > 2,
+        })),
+        mergeMap((act) =>
+          currentSongDetail$.pipe(
+            pluck('lyric'),
+            mergeMap((ly) =>
+              Array.isArray(ly) && ly.length
+                ? from(ly).pipe(
+                    map((i, idx) => ({ ...i, idx })),
+                    last((ly) => ly?.time < act.currentTime),
+                    mergeMap((ly) => {
+                      return !!ly
+                        ? of({
+                            ...ly,
+                            ...act,
+                          })
+                        : throwError(new Error('lyric not find'));
+                    })
+                  )
+                : throwError(new Error('lyric is empty'))
+            ),
+            catchError(() =>
+              of({
+                ...act,
+                idx: 0,
+                time: 0,
+                rawTime: '',
+                content: '',
+              })
+            )
+          )
+        )
+      );
+    } else if (act.type === 'switch') {
+      return of(act).pipe(
+        throttleTime(500),
+        pluck<PlayerAction, PlayerSwitchType>('target'),
+        withLatestFrom(songCtr$),
+        mergeMap(([act, curId]) =>
+          currentListDetail$.pipe(
+            pluck('tracks'),
+            mergeMap((list) =>
+              Array.isArray(list) && list.length
+                ? from(list).pipe(
+                    map((i, idx) => ({ ...i, idx })),
+                    last((i) => i.id === curId),
+                    map((i) => {
+                      if (typeof i?.idx === 'undefined') {
+                        return empty();
+                      }
+
+                      let idx = Number(i.idx) || 0;
+
+                      switch (act) {
+                        case 'next':
+                          idx++;
+                          break;
+                        case 'prev':
+                          idx--;
+                          break;
+                        default:
+                          break;
+                      }
+                      idx =
+                        idx > list.length - 1
+                          ? 0
+                          : idx < 0
+                          ? list.length - 1
+                          : idx;
+                      return list[idx];
+                    }),
+                    defaultIfEmpty(list[0]),
+                    map((i) => ({ ...i, type: 'switch' })),
+                    tap((song) => {
+                      songCtr$.next(song.id);
+                    })
+                  )
+                : throwError(new Error('lytracksric is empty'))
+            )
+          )
+        )
+      );
+    } else if (act.type === 'control') {
+      return of(act);
+    }
+  }),
+  catchError((e) => {
+    return of({
+      ...DefaultPlayerValue,
+      type: 'time',
+    });
+  })
 );
 
 export default function Page() {
@@ -190,7 +310,7 @@ export default function Page() {
   const [player, setPlayer] = useState(DefaultPlayerValue);
 
   const [listDetail, setListDetail] = useState(
-    {} as PlaylistItem & PlaylistDetailM
+    {} as playlistDetailQM['playlist']
   );
 
   const [songDetail, setSongDetail] = useState({
@@ -200,11 +320,25 @@ export default function Page() {
   });
 
   const onTimeUpdate = useCallback((e: any) => {
-    playerCtr$.next(e as { target: TimeUpdateValue });
+    playerCtr$.next({
+      type: 'time',
+      target: e.target,
+    } as PlayerAction);
   }, []);
 
   const autoPlay = useCallback(() => {
     audioRef.current?.play();
+    playerCtr$.next({
+      type: 'time',
+      target: {
+        currentTime: 0,
+        duration: audioRef.current.duration,
+        ended: audioRef.current.ended,
+        volume: audioRef.current.volume,
+        paused: true,
+        readyState: 2,
+      },
+    });
   }, []);
 
   const onPlaylistClick = useCallback((e: DatasetEvent) => {
@@ -215,9 +349,33 @@ export default function Page() {
     }
   }, []);
 
+  const onControlClick = useCallback((e: DatasetEvent) => {
+    const act =
+      e.target?.dataset?.act ??
+      e.target?.parentElement?.dataset?.act ??
+      e.target?.parentElement?.parentElement?.dataset?.act;
+
+    if (!act) {
+      return;
+    }
+
+    if (PlayerControlTypeArr.includes(act)) {
+      playerCtr$.next({
+        type: 'control',
+        target: act as PlayerControlType,
+      });
+    } else {
+      playerCtr$.next({
+        type: 'switch',
+        target: act as PlayerSwitchType,
+      });
+    }
+  }, []);
+
   const onSongListClick = useCallback((e: DatasetEvent) => {
     const songid =
       e.target?.dataset?.songid ?? e.target?.parentElement?.dataset?.songid;
+
     if (songid) {
       songCtr$.next(songid);
     }
@@ -261,13 +419,23 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    const subscription = player$.subscribe((actOne) => {
-      setPlayer(actOne);
+    const subscription = playerTime$.subscribe((actOne) => {
+      if (actOne.type && actOne.type === 'time') {
+        setPlayer(actOne as PlayerValueM);
 
-      if (ref.current) {
-        ref.current.style.transform = `translateY(${Math.floor(
-          192 - actOne.idx * 20
-        )}px)`;
+        if (ref.current) {
+          ref.current.style.transform = `translateY(${Math.floor(
+            192 - (actOne as PlayerValueM).idx * 20
+          )}px)`;
+        }
+      }
+      if (actOne.type && actOne.type === 'control') {
+        (actOne as {
+          type: 'control';
+          target: PlayerControlType;
+        }).target === 'pause'
+          ? audioRef?.current?.pause()
+          : audioRef?.current?.play();
       }
     });
 
@@ -282,7 +450,7 @@ export default function Page() {
         <div className="flex gap-20 min-w-max">
           <div
             className={`h-96 w-96 shadow-md rounded-full border-8 border-grey-900 ${
-              !player.ended ? 'animate-spin-30s' : ''
+              player.playing ? 'animate-spin-30s' : ''
             }`}
           >
             <img
@@ -362,35 +530,39 @@ export default function Page() {
         <div className="flex items-center justify-between">
           <img
             src={
-              'https://p2.music.126.net/-OTPMtpp1bgXKGZ7UvdMfw==/109951165448830413.jpg' ??
+              songDetail?.detail?.al?.picUrl ??
               'https://via.placeholder.com/60x60?text=Visit+Blogging.com+Now'
             }
             alt=""
             className="w-12 h-12 rounded-full block"
           />
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-8" onClick={onControlClick}>
             <GoStart
               theme="outline"
               size="24"
               className="text-grey-500 hover:text-cyan-500"
+              data-act="prev"
             />
-            {player.ended ? (
+            {player.playing ? (
               <Play
                 theme="outline"
                 size="24"
                 className="text-grey-300 hover:text-cyan-500"
+                data-act="pause"
               />
             ) : (
               <Pause
                 theme="outline"
                 size="24"
                 className="text-grey-300 hover:text-cyan-500"
+                data-act="play"
               />
             )}
             <GoEnd
               theme="outline"
               size="24"
               className="text-grey-500 hover:text-cyan-500"
+              data-act="next"
             />
             <div className="h-1 w-60 rounded bg-grey-500">
               <div
