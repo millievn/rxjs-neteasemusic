@@ -3,6 +3,12 @@ import { iif, interval, throwError } from 'rxjs';
 
 import { query$ } from './fetch';
 
+export type QrcodeQM = {
+  qrurl?: string;
+  qrimg?: string;
+  unikey?: string;
+};
+
 export const qrcodeQ$ = () =>
   query$(`/login/qr/key`, {
     withCookie: false,
@@ -21,11 +27,7 @@ export const qrcodeQ$ = () =>
                 qrurl?: string;
                 qrimg?: string;
               },
-              {
-                qrurl?: string;
-                qrimg?: string;
-                unikey?: string;
-              }
+              QrcodeQM
             >((v) => ({ ...v, unikey }))
           ),
           throwError('unikey is not avaiable')

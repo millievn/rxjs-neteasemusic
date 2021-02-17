@@ -1,14 +1,18 @@
-import { qrcodeQ$, loginM$ } from '@server';
-import { useEffect } from 'react';
-import { useObservable } from 'rxjs-hooks';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
+
+import { qrcodeQ$, loginM$, QrcodeQM } from '@server';
 
 export default function Page() {
   const router = useRouter();
-  const value = useObservable(qrcodeQ$);
+  const [qrcode, setQrcode] = useState({
+    qrurl: '',
+    qrimg: '',
+    unikey: '',
+  } as QrcodeQM);
 
   useEffect(() => {
-    const subscription = loginM$(value?.unikey).subscribe((res) => {
+    const subscription = loginM$(qrcode?.unikey).subscribe((res) => {
       document.cookie = res.cookie;
 
       router.push('/');
@@ -17,7 +21,17 @@ export default function Page() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [value]);
+  }, [qrcode]);
+
+  useEffect(() => {
+    const subscription = qrcodeQ$().subscribe((qr) => {
+      setQrcode(qr);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   return (
     <div className="grid place-items-center h-screen w-full">
@@ -26,7 +40,7 @@ export default function Page() {
         <div className="w-40 h-40">
           <img
             src={
-              value?.qrimg ??
+              qrcode?.qrimg ??
               'https://via.placeholder.com/40x40?text=Visit+Blogging.com+Now'
             }
             alt=""

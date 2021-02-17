@@ -2,7 +2,7 @@ import { fromFetch } from 'rxjs/fetch';
 import { catchError, retry, tap, timeout } from 'rxjs/operators';
 import { empty, of } from 'rxjs';
 
-import { localGetValue, __DEV__ } from '@utils';
+import { localGetValue, __DEV__, isBrowser } from '@utils';
 
 interface QueryOptions<T = any> {
   params?: Record<string, any>;
@@ -38,7 +38,13 @@ export function query$<T>(url: string, opt?: QueryOptions<T>) {
     .join('&');
 
   if (withCookie) {
-    search += `&cookie=${encodeURIComponent(localGetValue('cookie'))}`;
+    const cookie = localGetValue('cookie') as any;
+    if (!cookie && isBrowser() && !location.href.includes('login')) {
+      location.assign('/login');
+      return empty();
+    }
+
+    search += `&cookie=${encodeURIComponent(cookie)}`;
   }
   if (withTimestamp) {
     search += `&timestamp=${new Date().valueOf()}`;
